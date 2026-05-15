@@ -4,13 +4,13 @@
     {
       "name": "hacktricks",
       "type": "markdown",
-      "path": "/home/pigs4w/astaroth/brain/sources/hacktricks"
+      "path": "~/astaroth/brain/sources/hacktricks"
     }
   ],
   "memory": {
-    "path": "/home/pigs4w/astaroth/brain/memory"
+    "path": "~/astaroth/brain/memory"
   },
   "graph": {
-    "path": "/home/pigs4w/astaroth/brain/graph"
+    "path": "~/astaroth/brain/graph"
   }
 }

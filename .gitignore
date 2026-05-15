@@ -1,0 +1,14 @@
+env/
+__pycache__/
+*.pyc
+
+hacktricks_rag.db
+
+brain/graph/nodes/
+brain/graph/edges.json
+
+brain/memory/
+
+*.log
+*.tmp
+hacktricks/

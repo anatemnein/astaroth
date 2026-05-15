@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "hacktricks-consultant": {
+      "type": "stdio",
+      "command": "/home/quiet/astaroth/env/bin/python",
+      "args": [
+        "/home/quiet/astaroth/hacktricks_mcp.py"
+      ],
+      "env": {
+        "HACKTRICKS_DB": "/home/quiet/astaroth/hacktricks_rag.db",
+        "BRAIN_DIR": "/home/quiet/astaroth/brain",
+        "EMBED_MODEL": "nomic-embed-text",
+        "OLLAMA_EMBED_URL": "http://localhost:11434/api/embed"
+      }
+    }
+  }
+}

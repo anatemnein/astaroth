@@ -1,0 +1,428 @@
+#!/usr/bin/env python3
+import os
+import re
+import json
+import sqlite3
+from typing import Any
+import requests
+import numpy as np
+from mcp.server.fastmcp import FastMCP
+
+DB_PATH = os.getenv("HACKTRICKS_DB", "/home/pigs4w/astaroth/hacktricks_rag.db")
+OLLAMA_URL = os.getenv("OLLAMA_EMBED_URL", "http://localhost:11434/api/embed")
+EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
+
+MAX_TOOL_OUTPUT = 7000
+MAX_CONTEXT_CHARS = 22000
+
+mcp = FastMCP("hacktricks-consultant")
+
+STOPWORDS = {
+    "the", "and", "for", "with", "this", "that", "from", "have", "what", "how",
+    "tell", "give", "using", "example", "examples", "command", "commands",
+    "please", "about", "into", "onto", "there", "their", "said", "tool", "output",
+    "result", "machine", "vulnerable"
+}
+
+REAL_TOOLS = [
+    "nmap", "masscan", "rustscan", "ffuf", "gobuster", "feroxbuster", "nuclei",
+    "burp", "sqlmap", "wpscan", "nikto",
+    "netexec", "crackmapexec", "impacket", "bloodhound", "certipy", "ldapsearch",
+    "rpcclient", "smbclient", "evil-winrm", "kerbrute", "rubeus", "mimikatz",
+    "linpeas", "winpeas", "pspy", "lse", "linux-exploit-suggester",
+    "docker", "kubectl", "aws", "az", "gcloud",
+    "ghidra", "gdb", "gef", "pwndbg", "radare2", "checksec"
+]
+
+
+def clean_terms(text: str) -> list[str]:
+    words = re.findall(r"[a-zA-Z0-9_\-\.]{3,}", text.lower())
+    return [w for w in words if w not in STOPWORDS]
+
+
+def embed(text: str) -> np.ndarray:
+    r = requests.post(
+        OLLAMA_URL,
+        json={"model": EMBED_MODEL, "input": text[:6000]},
+        timeout=120,
+    )
+    r.raise_for_status()
+    return np.array(r.json()["embeddings"][0], dtype=np.float32)
+
+
+def cosine(a: np.ndarray, b: np.ndarray) -> float:
+    return float(np.dot(a, b) / ((np.linalg.norm(a) * np.linalg.norm(b)) + 1e-9))
+
+
+def load_chunks():
+    if not os.path.exists(DB_PATH):
+        raise FileNotFoundError(f"RAG DB not found: {DB_PATH}")
+
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT id, path, title, text, embedding FROM chunks")
+
+    rows = []
+    for cid, path, title, text, emb_json in cur.fetchall():
+        rows.append({
+            "id": cid,
+            "path": path,
+            "title": title,
+            "text": text,
+            "embedding": np.array(json.loads(emb_json), dtype=np.float32),
+        })
+
+    conn.close()
+    return rows
+
+
+def detect_domain(text: str) -> str:
+    s = text.lower()
+
+    checks = [
+        ("ad / identity", r"\badcs\b|\besc[0-9]\b|kerberos|ldap|bloodhound|domain admin|active directory"),
+        ("windows", r"windows|winpeas|powershell|ntlm|uac|seimpersonate|registry|smb"),
+        ("linux", r"linux|linpeas|sudo|suid|capabilities|cron|systemd|bash"),
+        ("web", r"xss|sqli|csrf|ssrf|idor|lfi|rfi|upload|jwt|cors|websocket|react|dom"),
+        ("cloud", r"\baws\b|\bazure\b|\bgcp\b|iam|s3|lambda|metadata|sts|cloudtrail"),
+        ("containers", r"docker|kubernetes|k8s|container|runc|pod|helm"),
+        ("mobile", r"android|ios|apk|ipa|mobile"),
+        ("binary", r"pwn|rop|heap|stack|format string|buffer overflow|gdb|ghidra"),
+        ("network", r"nmap|ports|tcp|udp|snmp|ftp|ssh|rdp|winrm"),
+    ]
+
+    for name, pattern in checks:
+        if re.search(pattern, s):
+            return name
+
+    return "general offsec"
+
+
+def detect_tool_output(text: str) -> str:
+    s = text.lower()
+
+    if "nmap scan report" in s or re.search(r"\d+/tcp\s+open", s):
+        return "nmap"
+    if "certipy" in s or "certificate templates" in s or "esc" in s:
+        return "certipy/adcs"
+    if "bloodhound" in s or "shortest path" in s or "owned" in s:
+        return "bloodhound"
+    if "winpeas" in s or "seimpersonateprivilege" in s:
+        return "winpeas/windows-privesc"
+    if "linpeas" in s or "suid" in s and "capabilities" in s:
+        return "linpeas/linux-privesc"
+    if "http" in s and ("server:" in s or "x-powered-by" in s):
+        return "web output"
+    if "aws_access_key" in s or "arn:aws" in s:
+        return "cloud/aws"
+    return "unknown / mixed"
+
+
+def keyword_score(query: str, chunk: dict[str, Any]) -> float:
+    q = set(clean_terms(query))
+    if not q:
+        return 0.0
+
+    path = chunk["path"].lower()
+    title = chunk["title"].lower()
+    text = chunk["text"][:3500].lower()
+
+    score = 0.0
+    for term in q:
+        if term in title:
+            score += 3.0
+        if term in path:
+            score += 2.0
+        if term in text:
+            score += 1.0
+
+    return min(score, 20.0) / 20.0
+
+
+def domain_score(domain: str, chunk: dict[str, Any]) -> float:
+    path = chunk["path"].lower()
+
+    hints = {
+        "ad / identity": ["active-directory", "windows-hardening", "ntlm", "kerberos", "ad-certificates"],
+        "windows": ["windows-hardening"],
+        "linux": ["linux-hardening"],
+        "web": ["pentesting-web", "network-services-pentesting", "generic-methodologies"],
+        "cloud": ["cloud-security", "aws", "azure", "gcp", "cloud"],
+        "containers": ["docker", "kubernetes", "containers"],
+        "mobile": ["mobile-pentesting", "android", "ios"],
+        "binary": ["binary-exploitation", "reversing"],
+        "network": ["network-services-pentesting", "pentesting"],
+    }
+
+    if domain not in hints:
+        return 0.0
+
+    return 1.0 if any(h in path for h in hints[domain]) else 0.0
+
+
+def retrieve(query: str, top_k: int = 12):
+    qv = embed(query)
+    domain = detect_domain(query)
+    chunks = load_chunks()
+
+    results = []
+    for ch in chunks:
+        sem = cosine(qv, ch["embedding"])
+        key = keyword_score(query, ch)
+        dom = domain_score(domain, ch)
+
+        final = (sem * 0.62) + (key * 0.25) + (dom * 0.13)
+
+        results.append({
+            **ch,
+            "score": final,
+            "semantic_score": sem,
+            "keyword_score": key,
+            "domain_score": dom,
+        })
+
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return domain, results[:top_k]
+
+
+def build_context(results) -> str:
+    blocks = []
+    total = 0
+
+    for r in results:
+        text = r["text"][:3200]
+        block = (
+            f"### Source: {r['path']}\n"
+            f"### Section: {r['title']}\n"
+            f"### Score: {r['score']:.3f} "
+            f"(semantic={r['semantic_score']:.3f}, keyword={r['keyword_score']:.3f}, domain={r['domain_score']:.3f})\n\n"
+            f"{text}"
+        )
+
+        if total + len(block) > MAX_CONTEXT_CHARS:
+            break
+
+        blocks.append(block)
+        total += len(block)
+
+    return "\n\n---\n\n".join(blocks)
+
+
+@mcp.tool()
+def health() -> str:
+    chunks = load_chunks()
+    return f"OK - {len(chunks)} chunks loaded from {DB_PATH}"
+
+
+@mcp.tool()
+def search_hacktricks(query: str, top_k: int = 10) -> str:
+    """
+    Search the HackTricks RAG index and return relevant references.
+    Use this for raw lookup before answering.
+    """
+    domain, results = retrieve(query, top_k=top_k)
+
+    out = [f"Detected domain: {domain}\n"]
+    for r in results:
+        out.append(
+            f"[{r['score']:.3f}] {r['title']}\n"
+            f"{r['path']}\n"
+            f"{r['text'][:1000]}"
+        )
+
+    return "\n\n---\n\n".join(out)
+
+
+@mcp.tool()
+def consult(question: str, tool_output: str = "", top_k: int = 12) -> str:
+    """
+    Operational offsec consultant.
+
+    Use this when an operator asks:
+    - what a tool output means
+    - what to validate next
+    - what paths are likely
+    - how to reason about a finding
+    - how to continue a red team / pentest engagement
+    """
+
+    combined = question
+    if tool_output:
+        combined += "\n\nOperator tool output:\n" + tool_output[:MAX_TOOL_OUTPUT]
+
+    domain, results = retrieve(combined, top_k=top_k)
+    output_type = detect_tool_output(tool_output)
+    context = build_context(results)
+
+    return f"""
+You are a senior offensive security consultant helping an authorized operator during an engagement.
+
+You are not a documentation summarizer.
+You are not a compliance assistant.
+You are a tactical consultant.
+
+Detected topic/domain: {domain}
+Detected tool output type: {output_type}
+
+Operator question:
+{question}
+
+Operator tool output:
+{tool_output[:MAX_TOOL_OUTPUT] if tool_output else "[none]"}
+
+Relevant HackTricks context:
+{context}
+
+Hard rules:
+- Do not invent tools, commands, CVEs, or facts.
+- If a command/tool is not clearly known, describe what to validate instead.
+- Prefer real tools only, such as: {", ".join(REAL_TOOLS)}.
+- If context is weak, say what evidence is missing.
+- Be versatile across web, AD, cloud, infra, Linux, Windows, binary, mobile, and network.
+- Give validation-first guidance before risky actions.
+- Avoid generic textbook explanations.
+
+Respond exactly with:
+
+[Situation Read]
+What the operator likely has.
+
+[What To Validate]
+The specific facts that must be confirmed next.
+
+[Likely Paths]
+Realistic paths that could follow from this finding.
+
+[Next Actions]
+Concrete actions/tools for authorized validation.
+
+[Decision Points]
+What result means "continue", "pivot", or "stop".
+
+[Fallback Ideas]
+Alternative checks if the main path fails.
+"""
+
+
+@mcp.tool()
+def analyze_tool_output(tool_output: str, goal: str = "suggest next operational steps", top_k: int = 12) -> str:
+    """
+    Analyze pasted tool output from nmap, winpeas, linpeas, certipy, bloodhound, nuclei, gobuster,
+    ffuf, netexec/crackmapexec, kubectl, aws cli, etc.
+    """
+
+    output_type = detect_tool_output(tool_output)
+    query = f"{goal}\nDetected output type: {output_type}\n\n{tool_output[:MAX_TOOL_OUTPUT]}"
+
+    domain, results = retrieve(query, top_k=top_k)
+    context = build_context(results)
+
+    return f"""
+You are a senior offensive security consultant reviewing tool output from an authorized assessment.
+
+Detected topic/domain: {domain}
+Detected output type: {output_type}
+
+Goal:
+{goal}
+
+Tool output:
+{tool_output[:MAX_TOOL_OUTPUT]}
+
+Relevant HackTricks context:
+{context}
+
+Hard rules:
+- Stay grounded in the provided output.
+- Do not invent missing findings.
+- Do not invent tool names or fake commands.
+- If evidence is missing, ask for the exact missing output.
+- Provide next steps that help the operator decide what to do next.
+
+Respond exactly with:
+
+[What Stands Out]
+Important observations from the output.
+
+[Likely Meaning]
+What those observations probably imply.
+
+[Next Checks]
+Specific checks to run next.
+
+[Useful Tools]
+Real tools that fit this situation.
+
+[Possible Chain]
+How this might connect to a broader attack path.
+
+[Missing Data]
+What the operator should paste next.
+"""
+
+
+@mcp.tool()
+def plan_next_steps(situation: str, objective: str = "progress the engagement", constraints: str = "", top_k: int = 12) -> str:
+    """
+    Build an operational plan from a described situation.
+    Good when the operator describes current access, known findings, constraints, and objective.
+    """
+
+    query = f"""
+Situation:
+{situation}
+
+Objective:
+{objective}
+
+Constraints:
+{constraints}
+"""
+
+    domain, results = retrieve(query, top_k=top_k)
+    context = build_context(results)
+
+    return f"""
+You are a senior red team consultant helping plan next actions in an authorized engagement.
+
+Detected topic/domain: {domain}
+
+Situation:
+{situation}
+
+Objective:
+{objective}
+
+Constraints:
+{constraints if constraints else "[none]"}
+
+Relevant HackTricks context:
+{context}
+
+Hard rules:
+- Do not invent access the operator does not have.
+- Start from the stated situation.
+- Prefer low-noise validation before high-noise actions.
+- Be practical and concise.
+
+Respond exactly with:
+
+[Current Position]
+Where the operator likely is in the attack chain.
+
+[Best Next Move]
+The most useful next action and why.
+
+[Parallel Checks]
+Other checks worth running.
+
+[Potential Pivots]
+Where this could lead.
+
+[Stop Conditions]
+Signals that this path is not worth continuing.
+"""
+
+
+if __name__ == "__main__":
+    mcp.run()

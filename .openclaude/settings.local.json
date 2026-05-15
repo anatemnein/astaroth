@@ -1,0 +1,6 @@
+{
+  "enabledMcpjsonServers": [
+    "hacktricks-consultant"
+  ],
+  "enableAllProjectMcpServers": true
+}

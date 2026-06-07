@@ -1,8 +1,5 @@
 mcp
-sentence-transformers
-faiss-cpu
-sqlite-utils
 numpy
-torch
-transformers
 requests
+sqlite-utils
+anthropic

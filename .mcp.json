@@ -1,16 +1,17 @@
 {
   "mcpServers": {
-    "hacktricks-consultant": {
+    "astaroth": {
       "type": "stdio",
       "command": "~/astaroth/env/bin/python",
       "args": [
-        "~/astaroth/hacktricks_mcp.py"
+        "~/astaroth/astaroth_mcp.py"
       ],
       "env": {
-        "HACKTRICKS_DB": "~/astaroth/hacktricks_rag.db",
-        "BRAIN_DIR": "~/astaroth/brain",
         "EMBED_MODEL": "nomic-embed-text",
-        "OLLAMA_EMBED_URL": "http://localhost:11434/api/embed"
+        "OLLAMA_EMBED_URL": "http://localhost:11434/api/embed",
+        "ANTHROPIC_API_KEY": "",
+        "ASTAROTH_MODEL": "claude-haiku-4-5",
+        "ASTAROTH_MAX_TOKENS": "1024"
       }
     }
   }

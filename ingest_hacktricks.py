@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 import os
 import re
+import sys
 import json
+import hashlib
 import sqlite3
 import requests
 from pathlib import Path
 
-BASE_DIR = Path("./hacktricks/src")
-DB_PATH = "hacktricks_rag.db"
-EMBED_MODEL = "nomic-embed-text"
-OLLAMA_URL = "http://localhost:11434/api/embed"
+BASE_DIR = Path(os.getenv("HACKTRICKS_SRC", str(Path(__file__).parent / "hacktricks" / "src")))
+DB_PATH = os.getenv("HACKTRICKS_DB", str(Path(__file__).parent / "hacktricks_rag.db"))
+EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
+OLLAMA_URL = os.getenv("OLLAMA_EMBED_URL", "http://localhost:11434/api/embed")
 
 
 def embed(text: str) -> list[float]:
@@ -18,8 +20,7 @@ def embed(text: str) -> list[float]:
         "input": text[:6000]
     }, timeout=120)
     r.raise_for_status()
-    data = r.json()
-    return data["embeddings"][0]
+    return r.json()["embeddings"][0]
 
 
 def clean_md(text: str) -> str:
@@ -43,7 +44,6 @@ def chunk_markdown(path: Path) -> list[dict]:
 
         title = part.splitlines()[0].strip("# ").strip() if part.splitlines() else path.name
 
-        # split long sections
         max_len = 2500
         for i in range(0, len(part), max_len):
             sub = part[i:i + max_len].strip()
@@ -57,46 +57,80 @@ def chunk_markdown(path: Path) -> list[dict]:
     return chunks
 
 
-def main():
-    conn = sqlite3.connect(DB_PATH)
+def content_hash(path: str, title: str, text: str) -> str:
+    return hashlib.sha256(f"{path}:{title}:{text}".encode()).hexdigest()[:20]
+
+
+def init_db(conn: sqlite3.Connection, rebuild: bool) -> None:
     cur = conn.cursor()
 
-    cur.execute("DROP TABLE IF EXISTS chunks")
+    if rebuild:
+        cur.execute("DROP TABLE IF EXISTS chunks")
+
     cur.execute("""
-        CREATE TABLE chunks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            path TEXT,
-            title TEXT,
-            text TEXT,
-            embedding TEXT
+        CREATE TABLE IF NOT EXISTS chunks (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            path      TEXT,
+            title     TEXT,
+            text      TEXT,
+            embedding TEXT,
+            hash      TEXT UNIQUE
         )
     """)
 
-    files = list(BASE_DIR.rglob("*.md"))
-    print(f"[+] Found {len(files)} markdown files")
+    # add hash column if upgrading from old schema without it
+    try:
+        cur.execute("ALTER TABLE chunks ADD COLUMN hash TEXT UNIQUE")
+    except sqlite3.OperationalError:
+        pass
 
-    total = 0
+    conn.commit()
+
+
+def main(rebuild: bool = False) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    init_db(conn, rebuild)
+    cur = conn.cursor()
+
+    files = list(BASE_DIR.rglob("*.md"))
+    print(f"[+] Source: {BASE_DIR}")
+    print(f"[+] Found {len(files)} markdown files")
+    print(f"[+] Mode: {'full rebuild' if rebuild else 'incremental (skipping already-indexed chunks)'}")
+
+    added = 0
+    skipped = 0
 
     for idx, path in enumerate(files, 1):
         chunks = chunk_markdown(path)
         if not chunks:
             continue
 
-        print(f"[{idx}/{len(files)}] {path} ({len(chunks)} chunks)")
-
+        file_added = 0
         for ch in chunks:
+            h = content_hash(ch["path"], ch["title"], ch["text"])
+
+            cur.execute("SELECT 1 FROM chunks WHERE hash = ?", (h,))
+            if cur.fetchone():
+                skipped += 1
+                continue
+
             vector = embed(ch["text"])
             cur.execute(
-                "INSERT INTO chunks (path, title, text, embedding) VALUES (?, ?, ?, ?)",
-                (ch["path"], ch["title"], ch["text"], json.dumps(vector))
+                "INSERT OR IGNORE INTO chunks (path, title, text, embedding, hash) VALUES (?, ?, ?, ?, ?)",
+                (ch["path"], ch["title"], ch["text"], json.dumps(vector), h)
             )
-            total += 1
+            added += 1
+            file_added += 1
 
-        conn.commit()
+        if file_added:
+            print(f"[{idx}/{len(files)}] {path.name} (+{file_added})")
+            conn.commit()
 
     conn.close()
-    print(f"[+] Indexed {total} chunks into {DB_PATH}")
+    print(f"[+] Done — added: {added}, skipped (already indexed): {skipped}")
+    print(f"[+] DB: {DB_PATH}")
 
 
 if __name__ == "__main__":
-    main()
+    rebuild = "--rebuild" in sys.argv
+    main(rebuild=rebuild)

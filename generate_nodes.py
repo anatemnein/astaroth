@@ -10,7 +10,7 @@ from pathlib import Path
 # PATHS
 # =========================
 
-BRAIN = Path.home() / "astaroth" / "brain"
+BRAIN = Path(os.getenv("BRAIN_DIR", str(Path(__file__).parent / "brain")))
 SOURCES = BRAIN / "sources"
 NODES = BRAIN / "graph" / "nodes"
 

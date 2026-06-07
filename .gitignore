@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 
 hacktricks_rag.db
+astaroth_rag.db
 
 brain/graph/nodes/
 brain/graph/edges.json
@@ -12,3 +13,6 @@ brain/memory/
 *.log
 *.tmp
 hacktricks/
+
+session.txt
+.openclaude/

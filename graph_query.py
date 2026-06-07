@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 
+import os
 import json
 import sys
 from pathlib import Path
 
-BRAIN = Path.home() / "astaroth" / "brain"
+BRAIN = Path(os.environ.get("BRAIN_DIR", str(Path(__file__).parent / "brain")))
 
 NODES_DIR = BRAIN / "graph" / "nodes"
 EDGES_FILE = BRAIN / "graph" / "edges.json"

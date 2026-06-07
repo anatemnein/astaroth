@@ -1,501 +1,279 @@
 # Astaroth
 
-> Offensive Security Copilot powered by MCP, RAG, Knowledge Graphs, and Local/Remote LLMs.
+> Stateful Offensive Security Copilot — MCP, RAG, Knowledge Graph, Engagement Memory.
 
-Astaroth is a local-first offensive security assistant designed for:
-
-- Red Team operations
-- Active Directory assessments
-- Cloud security testing
-- Infrastructure exploitation
-- Internal network operations
-- CTFs and labs
-- Tool output analysis
-- Attack path reasoning
-- Operator decision support
-
-Instead of acting like a generic chatbot, Astaroth behaves like an operator support system.
-
-It combines:
-
-- MCP (Model Context Protocol)
-- Semantic RAG retrieval
-- Knowledge graph traversal
-- Local or remote LLM inference
-- Attack chain reasoning
-- Operational context expansion
+Astaroth is a local-first operator support system for authorized red team engagements. It combines semantic knowledge retrieval, a structured attack technique graph, real tool output parsing, and persistent engagement state into a single MCP server that plugs into any LLM client.
 
 ---
 
-# Features
+## What it does
 
-## MCP Offensive Consultant
+Instead of answering generic security questions, Astaroth tracks your engagement. You ingest tool output, it parses it into structured findings, infers attack paths, and reasons over everything it knows when you ask what to do next.
 
-Astaroth exposes an MCP server that can be consumed by:
-
-- OpenClaude
-- Claude Desktop
-- OpenWebUI
-- Custom agent frameworks
-- LangGraph
-- Local copilots
-
-The MCP layer provides:
-
-- consultation
-- attack path reasoning
-- tool output interpretation
-- next-step planning
-- semantic retrieval
-- graph expansion
-- operational assistance
-
----
-
-## Semantic RAG Engine
-
-The project ingests HackTricks and converts it into searchable embeddings.
-
-Capabilities:
-
-- semantic search
-- context-aware retrieval
-- technique correlation
-- infrastructure-focused knowledge lookup
-- operator-oriented context building
-
----
-
-## Knowledge Graph Brain
-
-Astaroth automatically generates graph nodes and edges from offensive security documentation.
-
-The graph contains:
-
-- techniques
-- primitives
-- attack paths
-- credential abuse chains
-- cloud escalation paths
-- AD escalation paths
-- post-exploitation relationships
-
-This enables reasoning flows such as:
-
-```text
-ESC2
-→ certificate abuse
-→ PKINIT
-→ TGT
-→ DCSync
-````
-
----
-
-# Current Focus
-
-Astaroth is currently optimized for:
-
-* Active Directory
-* Windows Infrastructure
-* Azure
-* AWS
-* GCP
-* Linux privilege escalation
-* Internal infrastructure assessments
-
----
-
-# Architecture
-
-```text
-                ┌──────────────────┐
-                │   OpenClaude     │
-                │   OpenWebUI      │
-                │   Claude Desktop │
-                └────────┬─────────┘
-                         │
-                         ▼
-                ┌──────────────────┐
-                │   MCP Server     │
-                │ hacktricks_mcp.py│
-                └────────┬─────────┘
-                         │
-         ┌───────────────┼────────────────┐
-         ▼               ▼                ▼
- ┌────────────┐  ┌──────────────┐  ┌──────────────┐
- │ RAG Search │  │ Graph Brain  │  │ Attack Logic │
- └────────────┘  └──────────────┘  └──────────────┘
-         │               │                │
-         ▼               ▼                ▼
-    SQLite DB       Nodes/Edges      Future Planner
+```
+You run nmap, certipy, netexec → paste output into ingest()
+Astaroth parses it → stores hosts, services, findings, credentials
+You call reason() → it cross-references findings with 80+ technique patterns
+               → generates ranked attack paths
+               → pulls relevant HackTricks + graph context
+               → returns a prioritized operator-ready analysis
 ```
 
 ---
 
-# Requirements
+## Coverage
 
-## Recommended Environment
-
-* Linux
-* Python 3.11+
-* Ollama OR Claude API
-* 16GB+ RAM recommended
-* NVIDIA GPU optional
+| Domain | Tools parsed | Techniques |
+|---|---|---|
+| Active Directory | nmap, netexec, certipy, bloodhound, secretsdump, kerbrute, ldapsearch, enum4linux | Kerberoasting, ASREPRoast, ADCS ESC1-13, NTLM relay, unconstrained/constrained delegation, RBCD, shadow credentials, ACL abuse, GPO abuse, LAPS, cross-forest, DCSync |
+| Windows | winpeas | SeImpersonate, SeBackup, SeDebug, AlwaysInstallElevated, unquoted service paths, DLL hijacking, AutoLogon, service binary hijack |
+| Linux | linpeas | SUID, sudo NOPASSWD, capabilities, cron, docker/lxd/disk group, NFS no_root_squash, shadow read, passwd write |
+| Cloud — AWS | AWS CLI JSON, Prowler, ScoutSuite | IAM privilege escalation, PassRole chains, IMDSv1 SSRF, public S3, CloudTrail disabled, confused deputy, Lambda admin role |
+| Cloud — Azure | Azure CLI JSON | Owner/Contributor on external principals, managed identity abuse, public blob storage, Key Vault access |
+| Cloud — GCP | gcloud JSON | SA owner role, allUsers bindings, GCS public buckets, metadata SSRF, Workload Identity Federation |
+| Containers / K8s | kubectl JSON, docker inspect, trivy | Privileged container escape, docker socket mount, hostPath abuse, RBAC wildcards, SA cluster-admin bindings, etcd exposure, CVEs |
+| CI/CD / DevOps | GitHub Actions, GitLab CI, Jenkinsfile, env dumps | Pipeline injection, pull_request_target abuse, OIDC misconfiguration, self-hosted runner pivot, plaintext secrets, supply chain |
+| Network / Infra | nmap (XML + text) | Service enumeration, OS fingerprinting |
 
 ---
 
-# Installation
+## Architecture
 
-## Clone repository
+```
+LLM Client (Claude Code / OpenWebUI / Claude Desktop)
+           │
+           ▼
+    MCP Server (astaroth_mcp.py)
+           │
+    ┌──────┼──────────────────┐
+    │      │                  │
+    ▼      ▼                  ▼
+RAG DB  Graph Brain      Engagement Session
+(SQLite  (JSON nodes/     (SQLite per-engagement:
+ 9k+     edges from       hosts, services, creds,
+ chunks) HackTricks)      findings, attack paths)
+    │      │                  │
+    └──────┴──────────────────┘
+                  │
+           Engine Layer
+           ├── parsers/   (10 parsers, auto-dispatch)
+           └── reasoning/ (80+ technique patterns, path inference)
+```
+
+All components run locally. The only optional external call is to the Anthropic API for Claude synthesis (disabled by default).
+
+---
+
+## MCP Tools
+
+### Engagement management
+
+| Tool | Description |
+|---|---|
+| `engagement_new(name, scope)` | Start a new engagement session |
+| `engagement_load(name)` | Resume an existing engagement |
+| `engagement_list()` | List all saved engagements |
+| `engagement_status()` | Full situation report — hosts, creds, findings, attack paths |
+
+### Ingestion
+
+| Tool | Description |
+|---|---|
+| `ingest(tool_output, source_tool, host)` | Parse any tool output, store findings, auto-infer attack paths |
+| `add_cred(username, secret, secret_type, domain, source)` | Manually add a credential |
+| `add_finding(title, description, evidence, host, severity)` | Manually add a finding |
+| `mark_path(technique, status, notes)` | Update path status: `hypothesized / attempted / confirmed / failed` |
+
+### Analysis
+
+| Tool | Description |
+|---|---|
+| `reason(question)` | Holistic engagement analysis — combines session state, graph, and HackTricks |
+| `consult(question, tool_output)` | Ad-hoc question with optional tool output |
+| `analyze_tool_output(tool_output, goal)` | Analyze tool output without storing to session |
+| `plan_next_steps(situation, objective, constraints)` | Plan next actions from a described situation |
+
+### Knowledge retrieval
+
+| Tool | Description |
+|---|---|
+| `search_hacktricks(query)` | Direct semantic search over HackTricks RAG |
+| `graph_lookup(query)` | Query the attack technique knowledge graph |
+| `health()` | Server status — RAG, graph, session, Claude synthesis |
+
+---
+
+## Typical workflow
+
+```
+engagement_new("client-ad-2025", "10.10.10.0/24, domain: corp.local")
+
+# Recon
+ingest(<nmap output>)
+ingest(<netexec smb output>)
+ingest(<certipy find output>)
+ingest(<bloodhound JSON>)
+
+# Check what you have
+engagement_status()
+
+# Full analysis
+reason("what is the fastest path to domain admin given current findings?")
+
+# Track progress
+mark_path("ESC1 — Certificate Abuse", "confirmed", "certipy req succeeded")
+mark_path("NTLM Relay", "failed", "target has signing enforced")
+
+# Continue with session context automatically in all tools
+consult("I have a TGT for svc-backup, what can I do with it?")
+```
+
+---
+
+## Installation
+
+### Requirements
+
+- Python 3.11+
+- Ollama (for embeddings)
+- An MCP-compatible client (Claude Code, Claude Desktop, OpenWebUI)
+
+### Setup
 
 ```bash
-git clone https://github.com/anatemnein/astaroth.git
+git clone <repo>
 cd astaroth
-```
-
----
-
-## Create virtual environment
-
-```bash
 python -m venv env
 source env/bin/activate
-```
-
----
-
-## Install dependencies
-
-```bash
 pip install -r requirements.txt
 ```
 
----
-
-# LLM Backends
-
-Astaroth supports:
-
-* Local models via Ollama
-* Claude API
-* OpenAI-compatible APIs
-* Remote hosted inference
-
----
-
-# Option 1 — Using Ollama (Local Models)
-
-Install Ollama:
-
-[https://ollama.com](https://ollama.com)
-
-Pull recommended models:
+### Pull embedding model
 
 ```bash
-ollama pull qwen2.5:7b-instruct-q4_K_M
 ollama pull nomic-embed-text
 ```
 
-Recommended local models:
-
-* qwen2.5:7b-instruct-q4_K_M
-* qwen2.5-coder:7b-instruct-q4_K_M
-* deepseek-r1:8b
-
----
-
-# Option 2 — Using Claude API
-
-If you do not want to run local models with Ollama, you can use Claude directly through Anthropic API.
-
-Get an API key:
-
-[https://console.anthropic.com/](https://console.anthropic.com/)
-
-Export the API key:
-
-```bash
-export ANTHROPIC_API_KEY="your_api_key_here"
-```
-
-You can then configure your frontend/client to use Claude models such as:
-
-* claude-3-5-sonnet
-* claude-3-opus
-* claude-sonnet-4
-
-This is recommended for users who want:
-
-* better reasoning
-* stronger MCP/tool usage
-* larger context windows
-* higher quality operational guidance
-
-without running large local models.
-
----
-
-# Setup Knowledge Sources
-
-Astaroth requires a local copy of HackTricks in order to build the offensive knowledge base.
-
-Clone the official repository:
+### Clone HackTricks
 
 ```bash
 git clone https://github.com/HackTricks-wiki/hacktricks.git
 ```
 
-Create the local source link:
-
-```bash
-mkdir -p brain/sources
-ln -s ~/astaroth/hacktricks brain/sources/hacktricks
-```
-
-Then generate the graph and RAG database:
-
-```bash
-python generate_nodes.py
-python generate_edges.py
-python ingest_hacktricks.py
-```
-
----
-
-# Knowledge Sources & Attribution
-
-Astaroth does not redistribute HackTricks content directly.
-
-The project uses a local ingestion pipeline that allows operators to clone and process their own local copy of HackTricks for semantic retrieval and graph generation.
-
-Users must manually clone the official HackTricks repository:
-
-```bash
-git clone https://github.com/HackTricks-wiki/hacktricks.git
-```
-
-Official HackTricks repository:
-
-[https://github.com/HackTricks-wiki/hacktricks](https://github.com/HackTricks-wiki/hacktricks)
-
-All original content, research, methodologies, and documentation belong to the HackTricks project and its contributors.
-
-Astaroth acts as:
-
-* a local indexing layer
-* semantic retrieval engine
-* graph-generation framework
-* operator support system
-
-and does not claim ownership over HackTricks content.
-
----
-
-# Generate Brain Graph
-
-## Generate nodes
-
-```bash
-python generate_nodes.py
-```
-
-## Generate edges
-
-```bash
-python generate_edges.py
-```
-
----
-
-# Build RAG Database
+### Build the RAG database
 
 ```bash
 python ingest_hacktricks.py
 ```
 
----
-
-# Running the MCP Server
+This is incremental — safe to re-run. To force a full rebuild:
 
 ```bash
-python hacktricks_mcp.py
+python ingest_hacktricks.py --rebuild
 ```
 
-If it stays idle without output:
-
-```text
-MCP server is running correctly
-```
-
----
-
-# OpenClaude Integration
-
-Add MCP server:
+### Generate the knowledge graph
 
 ```bash
-openclaude mcp add hacktricks-consultant -- \
-  /home/user/astaroth/env/bin/python \
-  /home/user/astaroth/hacktricks_mcp.py
+python generate_nodes.py
+python generate_edges.py
+```
+
+Or use the helper script:
+
+```bash
+./scripts/rebuild_brain.sh
 ```
 
 ---
 
-# Claude Desktop Integration
+## MCP client configuration
 
-Claude Desktop users can add the MCP server by editing the MCP configuration.
-
-Example:
+### Claude Code / Claude Desktop
 
 ```json
 {
   "mcpServers": {
-    "hacktricks-consultant": {
-      "command": "/home/user/astaroth/env/bin/python",
-      "args": [
-        "/home/user/astaroth/hacktricks_mcp.py"
-      ]
+    "astaroth": {
+      "type": "stdio",
+      "command": "/path/to/astaroth/env/bin/python",
+      "args": ["/path/to/astaroth/astaroth_mcp.py"],
+      "env": {
+        "EMBED_MODEL": "nomic-embed-text",
+        "OLLAMA_EMBED_URL": "http://localhost:11434/api/embed",
+        "ANTHROPIC_API_KEY": "",
+        "ASTAROTH_MODEL": "claude-haiku-4-5",
+        "ASTAROTH_MAX_TOKENS": "1024"
+      }
     }
   }
 }
 ```
 
----
+### OpenWebUI (air-gapped)
 
-# Example Usage
-
-## Tool Output Analysis
-
-```text
-Use hacktricks-consultant analyze_tool_output.
-
-Goal:
-Identify likely attack paths.
-
-Tool output:
-
-PORT     STATE SERVICE
-22/tcp   open  ssh
-80/tcp   open  http
-445/tcp  open  smb
-```
+Connect via the MCP settings panel, pointing to `astaroth_mcp.py`. All inference stays local.
 
 ---
 
-## Operator Consultation
+## Claude synthesis (optional)
 
-```text
-Use hacktricks-consultant consult.
+When `ANTHROPIC_API_KEY` is set, the synthesis tools (`consult`, `analyze_tool_output`, `plan_next_steps`, `reason`) call Claude directly to produce a short synthesized answer instead of returning a raw context dump. Uses `claude-haiku-4-5` by default for low cost.
 
-Question:
-I found anonymous SMB access on a Linux server. What should I validate next?
-```
+| Env var | Default | Description |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | _(empty)_ | Enable Claude synthesis |
+| `ASTAROTH_MODEL` | `claude-haiku-4-5` | Model to use |
+| `ASTAROTH_MAX_TOKENS` | `1024` | Max tokens per synthesis response |
 
----
-
-## Next-Step Planning
-
-```text
-Use hacktricks-consultant plan_next_steps.
-
-Situation:
-Low-privileged SSH access on Linux host.
-
-Objective:
-Privilege escalation.
-
-Constraints:
-Avoid noisy kernel exploits.
-```
+When no key is set, tools return structured context prompts instead — works with any LLM client.
 
 ---
 
-# Project Structure
+## Data privacy
 
-```text
-astaroth/
-├── brain/
-├── docs/
-├── examples/
-├── parsers/
-├── scripts/
-├── generate_nodes.py
-├── generate_edges.py
-├── graph_query.py
-├── hacktricks_mcp.py
-├── ingest_hacktricks.py
-├── requirements.txt
-└── README.md
-```
+Every component runs locally:
 
----
+| Component | Location |
+|---|---|
+| MCP server | local subprocess (stdio) |
+| RAG database | local SQLite (`hacktricks_rag.db`) |
+| Embeddings | Ollama on `localhost:11434` |
+| Knowledge graph | local JSON files (`brain/`) |
+| Engagement sessions | local SQLite (`sessions/`) |
 
-# Project Roadmap
+**Data leaves the machine only if:**
+- `ANTHROPIC_API_KEY` is set (synthesis calls go to Anthropic)
+- A cloud-backed LLM client is used (Claude Code, Claude Desktop)
 
-* [ ] Autonomous attack chain engine
-* [ ] BloodHound parser
-* [ ] Certipy parser
-* [ ] NetExec parser
-* [ ] WinPEAS parser
-* [ ] Cloud attack graph
-* [ ] Credential memory
-* [ ] Session memory
-* [ ] Multi-host reasoning
-* [ ] Autonomous orchestration layer
-* [ ] Tool execution engine
-* [ ] Attack path prioritization
-* [ ] Multi-agent reasoning
+For engagements involving customer data, use OpenWebUI + a local Ollama model with `ANTHROPIC_API_KEY` unset. Zero data leaves the machine.
 
 ---
 
-# Status
+## Configuration reference
 
-This project is under active development.
-
-Current focus areas:
-
-* graph expansion
-* parser development
-* attack path reasoning
-* operational planning
-* autonomous orchestration
-
----
-
-# Disclaimer
-
-Astaroth is intended for:
-
-* authorized security testing
-* research environments
-* educational use
-* laboratory simulations
-* red team exercises
-* CTF environments
-
-Users are solely responsible for complying with all applicable laws and regulations.
+| Env var | Default | Description |
+|---|---|---|
+| `HACKTRICKS_DB` | `./hacktricks_rag.db` | RAG database path |
+| `BRAIN_DIR` | `./brain` | Knowledge graph directory |
+| `EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model |
+| `OLLAMA_EMBED_URL` | `http://localhost:11434/api/embed` | Ollama endpoint |
+| `ASTAROTH_SESSION_DIR` | `./sessions` | Engagement session storage |
+| `ANTHROPIC_API_KEY` | _(empty)_ | Claude synthesis (optional) |
+| `ASTAROTH_MODEL` | `claude-haiku-4-5` | Synthesis model |
+| `ASTAROTH_MAX_TOKENS` | `1024` | Synthesis token cap |
 
 ---
 
-# License
+## Scope
 
-MIT License
+Astaroth is intended for authorized security testing, internal red team operations, labs, CTFs, and security research. Users are responsible for complying with all applicable laws and authorization requirements.
 
 ---
 
-# Acknowledgements
+## Acknowledgements
 
-Special thanks to:
-
-* HackTricks
-* The offensive security community
-* Ollama
-* Anthropic
-* MCP ecosystem contributors
-* Open-source security researchers
-
-HackTricks is the primary knowledge source used to generate the local offensive knowledge graph and semantic retrieval database.
-
-```
-```
+- [HackTricks](https://github.com/HackTricks-wiki/hacktricks)
+- [Ollama](https://ollama.com)
+- [MCP ecosystem](https://modelcontextprotocol.io)
+- Offensive security community
